@@ -3940,7 +3940,7 @@ void VulkanDevice::recordDispatch(RecordedDispatch& record) {
             const std::pair<std::uint64_t, std::uint64_t> argumentRange{arguments, arguments + 12};
             recorder.NoteAccess(CommandClass::IndirectArguments, Graphics::Recorder::Access{std::span(&argumentRange, 1), {}, {}, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT});
         }
-        const auto reads = resources.InPlaceReads();
+        const auto& reads = resources.InPlaceReads();
         const auto images = resources.StorageImages();
         recorder.NoteAccess(CommandClass::DispatchLeading, Graphics::Recorder::Access{reads, resources.GpuWrites(), images, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, resources.HoldsLease()});
     }

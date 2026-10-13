@@ -337,6 +337,18 @@ void readTrackingTests(const Device& device, Recorder& recorder) {
     Require(Recorder::ReadCounts().hits[static_cast<std::size_t>(Kind::AddressBased)] >= 2, "address-based hits are not counted");
     recorder.Sync();
     Require(recorder.Idle() && !recorder.PendingReadOverlaps(0x20000, 0x1000, false), "noted ranges outlived their batch");
+    const auto beforeSpace = Recorder::ReadCounts().noted;
+    recorder.NotePendingSpaceReads(7, ranges, Kind::AddressBased);
+    recorder.NotePendingSpaceReads(7, ranges, Kind::AddressBased);
+    Require(Recorder::ReadCounts().noted == beforeSpace + ranges.size(), "an address space's reads were noted twice in one batch");
+    Require(recorder.PendingReadOverlaps(0x20fff, 1) && recorder.PendingReadOverlaps(0x30000, 16) && !recorder.PendingReadOverlaps(0x21000, 16), "an address space's reads are not seen as reads");
+    recorder.NotePendingSpaceReads(8, ranges, Kind::AddressBased);
+    recorder.NotePendingSpaceReads(0, ranges, Kind::AddressBased);
+    Require(Recorder::ReadCounts().noted == beforeSpace + 3 * ranges.size(), "another space's or a spaceless build's reads were not noted");
+    recorder.Sync();
+    recorder.NotePendingSpaceReads(7, ranges, Kind::AddressBased);
+    Require(Recorder::ReadCounts().noted == beforeSpace + 4 * ranges.size() && recorder.PendingReadOverlaps(0x20000, 4), "a new batch did not note the address space's reads again");
+    recorder.Sync();
 }
 
 void writeSettledTests(const Device& device, Recorder& recorder) {

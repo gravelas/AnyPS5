@@ -109,6 +109,7 @@ struct GuestBufferMemory::AddressSpace {
     std::vector<CopiedRange> copied;
     // The BDA table entries of `base`, in its order.
     std::vector<ShaderRecompiler::BdaAbi::Range> ranges;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> directReads;
     mutable std::mutex tableMutex;
     mutable std::map<std::vector<std::pair<std::uint64_t, std::uint64_t>>, std::pair<std::uint64_t, std::shared_ptr<const std::vector<ShaderRecompiler::BdaAbi::Range>>>> writeTables;
 };
@@ -2281,6 +2282,10 @@ void GuestBufferMemory::AcquireRegistered() {
                 }
                 regions = std::move(extras);
                 lease.clear();
+                for (const auto& region : built->base) {
+                    if (region.direct != nullptr) built->directReads.emplace_back(region.begin, region.end);
+                }
+                std::sort(built->directReads.begin(), built->directReads.end());
                 planSpaceMirrors(*built);
                 space = std::move(built);
                 spaces.droppedByWaiter.store(false, std::memory_order_relaxed);
@@ -2345,6 +2350,8 @@ GuestBufferMemory::BaseOverlap GuestBufferMemory::baseOverlap(std::uint64_t begi
 
 void GuestBufferMemory::dissolveSpace(bool resolve) {
     Require(space != nullptr, "no address space to dissolve");
+    inPlaceReadsBuilt = false;
+    ownInPlaceReadsBuilt = false;
     std::vector<Region> merged;
     merged.reserve(space->base.size() + regions.size());
     if (prepared) {
@@ -2906,6 +2913,8 @@ void GuestBufferMemory::UploadFinish(bool addressable) {
     Require(prepared && !uploaded, "guest memory upload was not prepared");
     uploaded = true;
     for (const auto& [begin, end] : writes) StorageTexture::FlushPending(begin, static_cast<std::size_t>(end - begin), nullptr, "written buffer range");
+    inPlaceReadsBuilt = false;
+    ownInPlaceReadsBuilt = false;
     static const bool profile = std::getenv("APS5_PROFILE_DRAW") != nullptr;
     const auto started = std::chrono::steady_clock::now();
     // Registered ranges to import from. Address-based shaders hold their lease until write-back;
@@ -3640,6 +3649,10 @@ void GuestBufferMemory::WriteBack() {
         }
     }
     committed = true;
+    inPlaceReadsBuilt = false;
+    inPlaceReads.clear();
+    ownInPlaceReadsBuilt = false;
+    ownInPlaceReads.clear();
     lease.clear();
     space.reset();
     heapReferences.clear();
@@ -3675,18 +3688,43 @@ std::optional<std::vector<std::pair<std::uint64_t, std::uint64_t>>> GuestBufferM
     return result;
 }
 
-std::vector<std::pair<std::uint64_t, std::uint64_t>> GuestBufferMemory::InPlaceReads() const {
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> result;
-    if (!uploaded || committed) return result;
+const std::vector<std::pair<std::uint64_t, std::uint64_t>>& GuestBufferMemory::InPlaceReads() const {
+    static const std::vector<std::pair<std::uint64_t, std::uint64_t>> none;
+    if (!uploaded || committed) return none;
+    if (inPlaceReadsBuilt) return inPlaceReads;
+    inPlaceReads.clear();
     if (space != nullptr) {
         for (const auto& region : space->base) {
-            if (region.direct != nullptr) result.emplace_back(region.begin, region.end);
+            if (region.direct != nullptr) inPlaceReads.emplace_back(region.begin, region.end);
         }
     }
     for (const auto& region : regions) {
-        if (region.direct != nullptr) result.emplace_back(region.begin, region.end);
+        if (region.direct != nullptr) inPlaceReads.emplace_back(region.begin, region.end);
     }
-    return result;
+    inPlaceReadsBuilt = true;
+    return inPlaceReads;
+}
+
+const std::vector<std::pair<std::uint64_t, std::uint64_t>>& GuestBufferMemory::OwnInPlaceReads() const {
+    static const std::vector<std::pair<std::uint64_t, std::uint64_t>> none;
+    if (!uploaded || committed) return none;
+    if (ownInPlaceReadsBuilt) return ownInPlaceReads;
+    ownInPlaceReads.clear();
+    for (const auto& region : regions) {
+        if (region.direct != nullptr) ownInPlaceReads.emplace_back(region.begin, region.end);
+    }
+    ownInPlaceReadsBuilt = true;
+    return ownInPlaceReads;
+}
+
+const std::vector<std::pair<std::uint64_t, std::uint64_t>>& GuestBufferMemory::SpaceReads() const {
+    static const std::vector<std::pair<std::uint64_t, std::uint64_t>> none;
+    if (!uploaded || committed || space == nullptr) return none;
+    return space->directReads;
+}
+
+std::uint64_t GuestBufferMemory::SpaceSerial() const {
+    return uploaded && !committed && space != nullptr ? space->serial : 0;
 }
 
 std::vector<std::pair<std::uint64_t, std::uint64_t>> GuestBufferMemory::DeviceReads() const {

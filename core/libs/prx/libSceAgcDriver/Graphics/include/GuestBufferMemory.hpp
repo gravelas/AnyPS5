@@ -263,7 +263,10 @@ public:
     // regions bound in place (`direct`), an address-based build's leased heaps included. A region
     // the GPU copies out of an import (gpuCopy) notes its read itself when the copy is recorded.
     // For the recorder's read tracking (ShaderResources::MarkGpuWrites); nothing once committed.
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> InPlaceReads() const;
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& InPlaceReads() const;
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& OwnInPlaceReads() const;
+    const std::vector<std::pair<std::uint64_t, std::uint64_t>>& SpaceReads() const;
+    std::uint64_t SpaceSerial() const;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> DeviceReads() const;
 
 private:
@@ -387,6 +390,10 @@ private:
     // UploadPrepare ran (regions are frozen); `uploaded` once UploadFinish ran.
     bool prepared = false;
     bool uploaded = false;
+    mutable std::vector<std::pair<std::uint64_t, std::uint64_t>> inPlaceReads;
+    mutable bool inPlaceReadsBuilt = false;
+    mutable std::vector<std::pair<std::uint64_t, std::uint64_t>> ownInPlaceReads;
+    mutable bool ownInPlaceReadsBuilt = false;
     bool committed = false;
 };
 

@@ -3514,7 +3514,7 @@ std::size_t ShaderResources::MaxDrawSnapshotBytes() {
 
 std::shared_ptr<ShaderResources::DrawBindings> ShaderResources::PrepareDrawBindings(Recorder& recorder, std::span<const MovedBuffer> moved) const {
     if ((_set == VK_NULL_HANDLE && fragment.set == VK_NULL_HANDLE) || usesBda) return {};
-    const auto reads = guestMemory.InPlaceReads();
+    const auto& reads = guestMemory.InPlaceReads();
     const auto maxSnapshotBytes = MaxDrawSnapshotBytes();
     std::size_t totalSnapshotBytes = 0;
     auto result = std::make_shared<DrawBindings>();
@@ -3622,7 +3622,9 @@ void ShaderResources::MarkGpuWrites(Recorder& recorder) {
     // The ranges this use reads in place through their host imports (read-only and written elements
     // alike, and an address-based build's whole leased heaps), before the writes: a CPU store into
     // one of them (the copy HLE) must not land before the recorded work read it.
-    recorder.NotePendingReads(guestMemory.InPlaceReads(), guestMemory.HoldsLease() ? Recorder::ReadKind::AddressBased : Recorder::ReadKind::DispatchElement);
+    const auto readKind = guestMemory.HoldsLease() ? Recorder::ReadKind::AddressBased : Recorder::ReadKind::DispatchElement;
+    recorder.NotePendingReads(guestMemory.OwnInPlaceReads(), readKind);
+    recorder.NotePendingSpaceReads(guestMemory.SpaceSerial(), guestMemory.SpaceReads(), readKind);
     if (SkipWriteBack()) return;
     for (std::size_t index = 0; index < storageTextures.size(); ++index) {
         if (!storageWritten[index]) continue;
@@ -3661,8 +3663,13 @@ void ShaderResources::WriteBackBuffers() {
 }
 
 bool ShaderResources::ReadsOverlap(std::uint64_t address, std::size_t bytes) const {
-    const auto reads = guestMemory.InPlaceReads();
-    return std::any_of(reads.begin(), reads.end(), [&](const auto& range) { return address < range.second && range.first < address + bytes; });
+    const auto end = address + bytes;
+    const auto& own = guestMemory.OwnInPlaceReads();
+    if (std::any_of(own.begin(), own.end(), [&](const auto& range) { return address < range.second && range.first < end; })) return true;
+    const auto& shared = guestMemory.SpaceReads();
+    auto it = std::upper_bound(shared.begin(), shared.end(), address, [](std::uint64_t value, const auto& range) { return value < range.first; });
+    if (it != shared.begin() && std::prev(it)->second > address) return true;
+    return it != shared.end() && it->first < end;
 }
 
 std::vector<std::pair<VkImage, bool>> ShaderResources::StorageImages() const {

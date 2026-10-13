@@ -2814,6 +2814,18 @@ void Recorder::NotePendingReads(std::span<const std::pair<std::uint64_t, std::ui
     readsNoted.fetch_add(ranges.size(), std::memory_order_relaxed);
 }
 
+void Recorder::NotePendingSpaceReads(std::uint64_t space, std::span<const std::pair<std::uint64_t, std::uint64_t>> ranges, ReadKind kind) {
+    if (space == 0) {
+        NotePendingReads(ranges, kind);
+        return;
+    }
+    if (ranges.empty() || !ReadTrackingEnabled()) return;
+    ensureOpen();
+    if (std::find(open->notedSpaces.begin(), open->notedSpaces.end(), space) != open->notedSpaces.end()) return;
+    open->notedSpaces.push_back(space);
+    NotePendingReads(ranges, kind);
+}
+
 const Recorder::Batch::Read* Recorder::readOverlap(const Batch& batch, std::uint64_t address, std::uint64_t end) {
     for (const auto& read : batch.reads) {
         if (address < read.end && read.begin < end) return &read;
